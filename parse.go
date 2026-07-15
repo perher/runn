@@ -510,6 +510,12 @@ func parseIncludeConfig(v any) (*includeConfig, error) {
 			if !ok {
 				return nil, fmt.Errorf("invalid include config: %v", v)
 			}
+			if runners, ok := vv["runners"]; ok {
+				c.runners, ok = runners.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("invalid include config: runners must be map: %v", v)
+				}
+			}
 			if vars, ok := vv["vars"]; ok {
 				c.vars, ok = vars.(map[string]any)
 				if !ok {

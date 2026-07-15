@@ -143,7 +143,20 @@ func (rnr *includeRunner) Run(ctx context.Context, s *step) error {
 			return err
 		}
 
-		oo, err = o.newNestedOperator(c.step, bookWithStore(ipath, pstore), SkipTest(c.skipTest), Force(c.force))
+		opts := append([]Option{bookWithStore(ipath, pstore)}, SkipTest(c.skipTest), Force(c.force))
+		if len(c.runners) > 0 {
+			for k, v := range c.step.includeConfig.runners {
+				id, ok := v.(string)
+				if !ok {
+					o.Warnf("invalid inline runner value: %v", v)
+					continue
+				}
+				if r, ok := o.httpRunners[id]; ok {
+					opts = append(opts, reuseHTTPRunner(k, r))
+				}
+			}
+		}
+		oo, err = o.newNestedOperator(c.step, opts...)
 		if err != nil {
 			return err
 		}
