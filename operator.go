@@ -1432,6 +1432,9 @@ func (op *operator) bookPathOrID() string {
 }
 
 func (op *operator) testName() string {
+	if op.desc != "" {
+		return op.desc
+	}
 	if op.bookPath == "" {
 		return fmt.Sprintf("-(%s)", op.id)
 	}
