@@ -119,6 +119,8 @@ func ParseRunbook(in io.Reader) (*runbook, error) {
 
 func parseRunbook(b []byte) (*runbook, error) {
 	rb := NewRunbook("")
+	// A runbook without desc must not inherit the default desc of `runn new`.
+	rb.Desc = ""
 
 	repFn := expand.InterpolateRepFn(os.LookupEnv)
 	rep, err := expand.ReplaceYAML(string(b), repFn)

@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -200,25 +202,24 @@ func (r *runNResult) simplify() runNResultSimplified {
 }
 
 func (rr *RunResult) outFailure(out io.Writer, index int) (int, error) {
-	const tr = "└──"
 	if rr.Err == nil {
 		return index, nil
 	}
-	paths, indexes, errs := failedRunbookPathsAndErrors(rr)
-	for ii, p := range paths {
-		_, _ = fmt.Fprintf(out, "%d) %s %s\n", index, normalizePath(p[0]), cyan(rr.ID))
-		for iii, pp := range p[1:] {
-			_, _ = fmt.Fprintf(out, "   %s%s %s\n", strings.Repeat("    ", iii), tr, pp)
+	stacks, errs := failedRunbookStacksAndErrors(rr)
+	for ii, frames := range stacks {
+		_, _ = fmt.Fprintf(out, "%d) %s %s\n", index, normalizePath(frames[0].path), cyan(rr.ID))
+		if cs := formatCallStack(frames); cs != "" {
+			_, _ = fmt.Fprint(out, sprintMultilinef("  %s\n", "%v", cs))
 		}
 		_, _ = fmt.Fprint(out, sprintMultilinef("  %s\n", "%v", red(fmt.Sprintf("Failure/Error: %s", strings.TrimRight(errs[ii].Error(), "\n")))))
 
-		last := p[len(p)-1]
+		last := frames[len(frames)-1].path
 		b, err := fs.ReadFile(last)
 		if err != nil {
 			return index, err
 		}
 
-		idx := indexes[ii]
+		idx := frames[len(frames)-1].stepIndex()
 		if idx >= 0 {
 			picked, err := pickStepYAML(string(b), idx)
 			if err != nil {
@@ -234,41 +235,111 @@ func (rr *RunResult) outFailure(out io.Writer, index int) (int, error) {
 	return index, nil
 }
 
-func failedRunbookPathsAndErrors(rr *RunResult) ([][]string, []int, []error) {
+// failureFrame is one level of the include chain that leads to a failure.
+type failureFrame struct {
+	path string
+	// step is nil when the failure cannot be attributed to a step of the runbook.
+	step *StepResult
+}
+
+func (f failureFrame) stepIndex() int {
+	if f.step == nil {
+		return -1
+	}
+	return f.step.Index
+}
+
+func (f failureFrame) String() string {
+	// Inline included runbooks get a synthetic path derived from the file that defines them.
+	if file, _, ok := strings.Cut(f.path, ".inline-0x"); ok {
+		loc := normalizePath(file) + " (inline include)"
+		if f.step == nil {
+			return loc
+		}
+		return fmt.Sprintf("%s steps[%d]", loc, f.step.Index)
+	}
+	loc := normalizePath(f.path)
+	if f.step == nil {
+		return loc
+	}
+	if line := stepStartLine(f.path, f.step.Index); line > 0 {
+		loc = fmt.Sprintf("%s:%d", loc, line)
+	}
+	if f.step.Key == strconv.Itoa(f.step.Index) {
+		loc = fmt.Sprintf("%s steps[%d]", loc, f.step.Index)
+	} else {
+		loc = fmt.Sprintf("%s steps.%s", loc, f.step.Key)
+	}
+	if f.step.Desc != "" {
+		loc = fmt.Sprintf("%s %q", loc, f.step.Desc)
+	}
+	return loc
+}
+
+// stepStartLine returns 0 if the line of the step cannot be determined.
+func stepStartLine(path string, idx int) int {
+	b, err := fs.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	a := detectRunbookAreas(string(b))
+	if idx < 0 || idx >= len(a.Steps) {
+		return 0
+	}
+	return a.Steps[idx].Start.Line
+}
+
+// formatCallStack renders the include chain from the root runbook down to the failed step.
+// It returns an empty string if no frame can be attributed to a step.
+func formatCallStack(frames []failureFrame) string {
+	if !slices.ContainsFunc(frames, func(f failureFrame) bool { return f.step != nil }) {
+		return ""
+	}
+	const tr = "└── "
+	lines := []string{"Call stack:"}
+	for i, f := range frames {
+		var branch string
+		if i > 0 {
+			branch = strings.Repeat("    ", i-1) + tr
+		}
+		lines = append(lines, "  "+branch+f.String())
+	}
+	return strings.Join(lines, "\n")
+}
+
+// failedRunbookStacksAndErrors returns, for each failure, the include chain
+// from rr down to the failed step together with the error of that step.
+func failedRunbookStacksAndErrors(rr *RunResult) ([][]failureFrame, []error) {
 	var (
-		paths   [][]string
-		indexes []int
-		errs    []error
+		stacks [][]failureFrame
+		errs   []error
 	)
 	if rr.Err == nil {
-		return paths, indexes, errs
+		return stacks, errs
 	}
 	for _, sr := range rr.StepResults {
-		if sr.Err == nil {
+		if sr == nil || sr.Err == nil {
 			continue
 		}
+		frame := failureFrame{path: rr.Path, step: sr}
 		if len(sr.IncludedRunResults) == 0 {
-			paths = append(paths, []string{rr.Path})
+			stacks = append(stacks, []failureFrame{frame})
 			errs = append(errs, sr.Err)
-			indexes = append(indexes, sr.Index)
 			continue
 		}
 		for _, ir := range sr.IncludedRunResults {
-			ps, is, es := failedRunbookPathsAndErrors(ir)
-			for _, p := range ps {
-				p = append([]string{rr.Path}, p...)
-				paths = append(paths, p)
+			ss, es := failedRunbookStacksAndErrors(ir)
+			for _, s := range ss {
+				stacks = append(stacks, append([]failureFrame{frame}, s...))
 			}
-			indexes = append(indexes, is...)
 			errs = append(errs, es...)
 		}
 	}
-	if len(paths) == 0 {
-		paths = append(paths, []string{rr.Path})
+	if len(stacks) == 0 {
+		stacks = append(stacks, []failureFrame{{path: rr.Path}})
 		errs = append(errs, rr.Err)
-		indexes = append(indexes, -1)
 	}
-	return paths, indexes, errs
+	return stacks, errs
 }
 
 func simplifyRunResult(rr *RunResult) *runResultSimplified {

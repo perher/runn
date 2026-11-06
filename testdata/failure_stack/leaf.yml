@@ -1,0 +1,5 @@
+steps:
+  - test: true
+  - bind:
+      status: 200
+    test: status == 201

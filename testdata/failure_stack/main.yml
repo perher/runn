@@ -1,0 +1,5 @@
+steps:
+  - test: true
+  - desc: include mid
+    include:
+      path: mid.yml

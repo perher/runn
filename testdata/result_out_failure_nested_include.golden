@@ -1,0 +1,18 @@
+1) testdata/failure_stack/main.yml ab13ba1e546838ceafa17f91ab3220102f397b2e
+  Call stack:
+    testdata/failure_stack/main.yml:3 steps[1] "include mid"
+    └── testdata/failure_stack/mid.yml:4 steps.call_leaf
+        └── testdata/failure_stack/leaf.yml:3 steps[1]
+  Failure/Error: test failed on "testdata/failure_stack/leaf.yml".steps[1]: condition is not true
+  
+  Condition:
+    status == 201
+    │
+    ├── status => 200
+    └── 201
+    
+  Failure step (testdata/failure_stack/leaf.yml):
+  3   - bind:
+  4       status: 200
+  5     test: status == 201
+

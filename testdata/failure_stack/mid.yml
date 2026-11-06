@@ -1,0 +1,6 @@
+steps:
+  prepare:
+    test: true
+  call_leaf:
+    include:
+      path: leaf.yml

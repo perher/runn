@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/tenntenn/golden"
@@ -105,6 +106,38 @@ func TestResultOut(t *testing.T) {
 				t.Error(diff)
 			}
 		})
+	}
+}
+
+func TestResultOutFailureNestedInclude(t *testing.T) {
+	noColor(t)
+	o, err := New(Book("testdata/failure_stack/main.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runErr := o.Run(context.Background())
+	if runErr == nil {
+		t.Fatal("want error")
+	}
+	want := `test failed on "testdata/failure_stack/leaf.yml".steps[1]`
+	if !strings.Contains(runErr.Error(), want) {
+		t.Errorf("got %q, want it to contain %q", runErr.Error(), want)
+	}
+
+	rr := o.Result()
+	rr.ID = "ab13ba1e546838ceafa17f91ab3220102f397b2e"
+	buf := new(bytes.Buffer)
+	if err := rr.OutFailure(buf); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	const key = "result_out_failure_nested_include"
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		golden.Update(t, "testdata", key, got)
+		return
+	}
+	if diff := golden.Diff(t, "testdata", key, got); diff != "" {
+		t.Error(diff)
 	}
 }
 

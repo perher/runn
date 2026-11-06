@@ -13,6 +13,7 @@ import (
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1145,15 +1146,15 @@ func (op *operator) run(ctx context.Context) error {
 			if err != nil {
 				// Skip parent runner t.Error if there is an error in the included runbook
 				if !errors.Is(&includedRunErr{}, err) {
-					paths, indexes, errs := failedRunbookPathsAndErrors(op.runResult)
-					for ii, p := range paths {
-						last := p[len(p)-1]
+					stacks, errs := failedRunbookStacksAndErrors(op.runResult)
+					for ii, frames := range stacks {
+						last := frames[len(frames)-1].path
 						b, err := fs.ReadFile(last)
 						if err != nil {
 							t.Error(errs[ii])
 							continue
 						}
-						idx := indexes[ii]
+						idx := frames[len(frames)-1].stepIndex()
 						var fs string
 						if idx >= 0 {
 							picked, err := pickStepYAML(string(b), idx)
@@ -1162,6 +1163,9 @@ func (op *operator) run(ctx context.Context) error {
 								continue
 							}
 							fs = fmt.Sprintf("Failure step (%s):\n%s\n\n", last, picked)
+						}
+						if cs := formatCallStack(frames); cs != "" {
+							fs = cs + "\n" + fs
 						}
 						if !strings.HasSuffix(errs[ii].Error(), "\n") {
 							fs = "\n" + fs
@@ -1432,7 +1436,7 @@ func (op *operator) bookPathOrID() string {
 }
 
 func (op *operator) testName() string {
-	if op.desc != "" {
+	if op.desc != "" && op.desc != noDesc {
 		return op.desc
 	}
 	if op.bookPath == "" {
@@ -1448,10 +1452,24 @@ func (op *operator) stepName(i int) string {
 		prefix = fmt.Sprintf(".loop[%d]", *op.store.LoopIndex())
 	}
 	if op.useMap {
-		return fmt.Sprintf("%q.steps.%s%s", op.desc, op.steps[i].key, prefix)
+		return fmt.Sprintf("%s.steps.%s%s", op.stepNamePrefix(), op.steps[i].key, prefix)
 	}
 
-	return fmt.Sprintf("%q.steps[%d]%s", op.desc, i, prefix)
+	return fmt.Sprintf("%s.steps[%d]%s", op.stepNamePrefix(), i, prefix)
+}
+
+// stepNamePrefix - identifies the runbook step name by its desc or by its file.
+func (op *operator) stepNamePrefix() string {
+	if op.desc != "" && op.desc != noDesc {
+		return strconv.Quote(op.desc)
+	}
+	if p := op.parent; p != nil && p.includeConfig != nil && p.includeConfig.inline {
+		return p.parent.stepName(p.idx) + ".include"
+	}
+	if op.bookPath != "" {
+		return strconv.Quote(op.bookPath)
+	}
+	return strconv.Quote(op.desc)
 }
 
 // expandBeforeRecord - expand before the runner records the result.
